@@ -686,11 +686,9 @@ int main(int argc, char** argv) {
         ctx->client = client;
         ctx->ops = base_ops + (t < (int)rem ? 1 : 0);
         ctx->thread_id = (uint64_t)t;
-        uint64_t seed = 0xdeadbeefULL ^ ((uint64_t)t << 32) ^
-                        (uint64_t)std::random_device{}();
+        uint64_t seed = 0xdeadbeefULL ^ ((uint64_t)t << 32) ^ (uint64_t)std::random_device{}();
         uint64_t seq_start =
-            (a.addr_space > 0) ? ((a.addr_space / a.threads) * t) % a.addr_space
-                               : 0;
+            (a.addr_space > 0) ? ((a.addr_space / a.threads) * t) % a.addr_space : 0;
         uint64_t n =
             (a.op == "read-range")
                 ? std::min<uint64_t>(
@@ -700,19 +698,26 @@ int main(int argc, char** argv) {
         if (n == 0) n = 1;
         ctx->dist = make_dist(a.pattern, n, a.zipf_s, seed, seq_start);
 
-        ths.emplace_back([&, k = t]() {
+        ctxs.push_back(std::move(ctx));
+      }
+
+      auto t0 = Clock::now();
+      // 再启动线程，捕获稳定指针
+      for (int t = 0; t < a.threads; ++t) {
+        WorkerCtx* ctxp = ctxs[t].get();
+        ths.emplace_back([&, ctxp]() {
           if (a.op == "write") {
-            run_write(*ctxs[k], stats);
+            run_write(*ctxp, stats);
           } else if (a.op == "read-object") {
-            run_read_object(*ctxs[k], stats);
+            run_read_object(*ctxp, stats);
           } else if (a.op == "read-range") {
-            run_read_range(*ctxs[k], stats);
+            run_read_range(*ctxp, stats);
           } else {
             throw std::runtime_error("unknown op: " + a.op);
           }
         });
-        ctxs.push_back(std::move(ctx));
       }
+
       for (auto& th : ths) th.join();
       auto t1 = Clock::now();
       double seconds = std::chrono::duration<double>(t1 - t0).count();

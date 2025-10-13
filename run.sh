@@ -89,11 +89,12 @@ echo "Prefix: $PREFIX"
 for size in "${SIZES[@]}"; do
   AS=$(addr_space_for_size "$size")
   OPS=$(ops_for_size "$size")
+  IFS=' ' read -r -a THREADS_EFF <<< "$(threads_for_size "$size")"
 
-  echo "======== Size: $size | addr_space=$AS | ops=$OPS ========"
+  echo "======== Size: $size | addr_space=$AS | ops=$OPS | threads_set=[${THREADS_EFF[*]}] ========"
 
   # 1) write-object
-  for th in "${THREADS[@]}"; do
+  for th in "${THREADS_EFF[@]}"; do
     for pat in "${PATTERNS[@]}"; do
       echo "[WRITE] size=$size threads=$th pattern=$pat"
       $BIN --op=write --bucket="$BUCKET" --region="$REGION" --prefix="$PREFIX" \
@@ -104,7 +105,7 @@ for size in "${SIZES[@]}"; do
   done
 
   # 2) read-object
-  for th in "${THREADS[@]}"; do
+  for th in "${THREADS_EFF[@]}"; do
     for pat in "${PATTERNS[@]}"; do
       echo "[READ-OBJECT] size=$size threads=$th pattern=$pat"
       $BIN --op=read-object --bucket="$BUCKET" --region="$REGION" --prefix="$PREFIX" \
