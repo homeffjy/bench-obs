@@ -31,27 +31,32 @@ using Clock = std::chrono::steady_clock;
 using Ms = std::chrono::milliseconds;
 using Us = std::chrono::microseconds;
 
-static const char* kAllocTag = "s3-bench";
+static const char *kAllocTag = "s3-bench";
 
 // ---------- utils: string, size parsing ----------
 static inline std::string to_lower(std::string s) {
-  for (char& c : s) c = std::tolower(static_cast<unsigned char>(c));
+  for (char &c : s)
+    c = std::tolower(static_cast<unsigned char>(c));
   return s;
 }
 static inline std::string to_upper(std::string s) {
-  for (char& c : s) c = std::toupper(static_cast<unsigned char>(c));
+  for (char &c : s)
+    c = std::toupper(static_cast<unsigned char>(c));
   return s;
 }
-static uint64_t parse_size(const std::string& in) {
+static uint64_t parse_size(const std::string &in) {
   std::string s = to_upper(in);
   // remove spaces
   s.erase(std::remove_if(s.begin(), s.end(), ::isspace), s.end());
-  if (s.empty()) throw std::runtime_error("empty size");
+  if (s.empty())
+    throw std::runtime_error("empty size");
 
   // find number and suffix
   size_t i = 0;
-  while (i < s.size() && (std::isdigit(s[i]) || s[i] == '.')) i++;
-  if (i == 0) throw std::runtime_error("invalid size: " + in);
+  while (i < s.size() && (std::isdigit(s[i]) || s[i] == '.'))
+    i++;
+  if (i == 0)
+    throw std::runtime_error("invalid size: " + in);
   double val = std::stod(s.substr(0, i));
   std::string suf = (i < s.size() ? s.substr(i) : "");
 
@@ -91,7 +96,7 @@ static inline std::string now_iso() {
 // ---------- distributions ----------
 struct IDistribution {
   virtual ~IDistribution() = default;
-  virtual uint64_t next() = 0;  // returns in [0, n-1]
+  virtual uint64_t next() = 0; // returns in [0, n-1]
 };
 
 struct SeqDistribution : IDistribution {
@@ -113,7 +118,8 @@ struct UniformDistribution : IDistribution {
   UniformDistribution(uint64_t n_, uint64_t seed)
       : n(n_), rng(seed), dist(0, n_ ? n_ - 1 : 0) {}
   uint64_t next() override {
-    if (n == 0) return 0;
+    if (n == 0)
+      return 0;
     return dist(rng);
   }
 };
@@ -124,11 +130,12 @@ struct ZipfDistribution : IDistribution {
   double s;
   std::mt19937_64 rng;
   std::uniform_real_distribution<double> U{0.0, 1.0};
-  std::vector<double> cdf;  // cdf[i] for rank i+1
+  std::vector<double> cdf; // cdf[i] for rank i+1
 
   ZipfDistribution(uint64_t n_, double s_, uint64_t seed)
       : n(n_), s(s_), rng(seed) {
-    if (n == 0) return;
+    if (n == 0)
+      return;
     cdf.resize(n);
     long double Hn = 0.0L;
     for (uint64_t k = 1; k <= n; ++k) {
@@ -143,27 +150,29 @@ struct ZipfDistribution : IDistribution {
     cdf.back() = 1.0;
   }
   uint64_t next() override {
-    if (n == 0) return 0;
+    if (n == 0)
+      return 0;
     double u = U(rng);
     auto it = std::lower_bound(cdf.begin(), cdf.end(), u);
     uint64_t rank_index =
-        (uint64_t)std::distance(cdf.begin(), it);  // 0..n-1, rank=idx+1
-    return rank_index;  // we treat addr index = rank_index
+        (uint64_t)std::distance(cdf.begin(), it); // 0..n-1, rank=idx+1
+    return rank_index; // we treat addr index = rank_index
   }
 };
 
 // ----- zero/pattern stream (request body without holding huge memory) -----
 class PatternBuf : public std::streambuf {
- public:
+public:
   explicit PatternBuf(uint64_t total_len, unsigned char byte = 0)
       : total(total_len), pattern(byte) {
-    setp(nullptr, nullptr);        // no output
-    setg(buffer, buffer, buffer);  // empty get area
+    setp(nullptr, nullptr);       // no output
+    setg(buffer, buffer, buffer); // empty get area
   }
 
- protected:
+protected:
   int_type underflow() override {
-    if (pos() >= total) return traits_type::eof();
+    if (pos() >= total)
+      return traits_type::eof();
 
     // Fill buffer with min(kChunk, remaining)
     const uint64_t remaining = total - pos();
@@ -175,14 +184,15 @@ class PatternBuf : public std::streambuf {
     setg(buffer, buffer, buffer + n);
     // We define "pos" as the position of gptr(); we'll advance it virtually on
     // seek.
-    current_block_begin = logical;  // remember where this block starts
-    logical += n;                   // logical end after this block
+    current_block_begin = logical; // remember where this block starts
+    logical += n;                  // logical end after this block
     return traits_type::to_int_type(*gptr());
   }
 
   pos_type seekoff(off_type off, std::ios_base::seekdir dir,
                    std::ios_base::openmode which) override {
-    if (!(which & std::ios_base::in)) return pos_type(off_type(-1));
+    if (!(which & std::ios_base::in))
+      return pos_type(off_type(-1));
     long long base = 0;
     if (dir == std::ios_base::beg) {
       base = 0;
@@ -198,7 +208,7 @@ class PatternBuf : public std::streambuf {
     // Reset get area so the next underflow will refill from new position
     logical = static_cast<uint64_t>(newpos);
     current_block_begin = logical;
-    setg(buffer, buffer, buffer);  // invalidate buffered data
+    setg(buffer, buffer, buffer); // invalidate buffered data
     return pos_type(logical);
   }
 
@@ -206,7 +216,7 @@ class PatternBuf : public std::streambuf {
     return seekoff(off_type(sp), std::ios_base::beg, which);
   }
 
- private:
+private:
   // Stream "logical" position is the position of the next byte to serve (i.e.,
   // gptr()).
   uint64_t pos() const {
@@ -221,55 +231,55 @@ class PatternBuf : public std::streambuf {
   static constexpr size_t kChunk = 64 * 1024;
   char buffer[kChunk];
 
-  uint64_t total = 0;    // total length to present
-  uint64_t logical = 0;  // next byte index to present
+  uint64_t total = 0;   // total length to present
+  uint64_t logical = 0; // next byte index to present
   uint64_t current_block_begin = 0;
   unsigned char pattern = 0;
 };
 
 class PatternStream : public Aws::IOStream {
- public:
+public:
   explicit PatternStream(uint64_t total_len, unsigned char byte = 0)
       : Aws::IOStream(nullptr), buf(total_len, byte) {
-    this->rdbuf(&buf);  // attach buffer
-    this->clear();      // clear badbit set by null-ctor so good() is true
+    this->rdbuf(&buf); // attach buffer
+    this->clear();     // clear badbit set by null-ctor so good() is true
   }
 
- private:
+private:
   PatternBuf buf;
 };
 
 // ---------- args / config ----------
 struct Args {
   // required
-  std::string op = "write";  // write | read-object | read-range
+  std::string op = "write"; // write | read-object | read-range
   std::string bucket;
   std::string region;
 
   // common
   std::string prefix = "bench/";
-  uint64_t size = 1024;  // per-op size (bytes)
+  uint64_t size = 1024; // per-op size (bytes)
   int threads = 1;
   uint64_t total_ops = 1000;
-  std::string pattern = "uniform";  // uniform|seq|zipf
+  std::string pattern = "uniform"; // uniform|seq|zipf
   double zipf_s = 1.1;
-  uint64_t addr_space = 1024;  // object keys or start-offset slots
+  uint64_t addr_space = 1024; // object keys or start-offset slots
   int connect_timeout_ms = 5000;
   int request_timeout_ms = 300000;
-  int max_connections = 0;  // 0 -> auto = threads*2
-  std::string endpoint;     // optional
+  int max_connections = 0; // 0 -> auto = threads*2
+  std::string endpoint;    // optional
   bool log_ops = false;
   std::string results_dir = "results";
-  std::string sink_path = "/dev/null";  // for GET body
+  std::string sink_path = "/dev/null"; // for GET body
 
   // read-range
-  std::string range_key = "range.bin";  // object name for range read
+  std::string range_key = "range.bin"; // object name for range read
   uint64_t range_span =
-      1024ull * 1024ull * 1024ull;  // total object length for range object
+      1024ull * 1024ull * 1024ull; // total object length for range object
 
   // write/read-object
-  std::string single_key;     // if non-empty, override key
-  bool delete_after = false;  // delete objects written after test (caution!)
+  std::string single_key;    // if non-empty, override key
+  bool delete_after = false; // delete objects written after test (caution!)
 };
 
 static void print_help() {
@@ -313,12 +323,12 @@ static void print_help() {
          "--total_ops=200000\n";
 }
 
-static bool parse_bool(const std::string& s) {
+static bool parse_bool(const std::string &s) {
   std::string v = to_lower(s);
   return (v == "1" || v == "true" || v == "yes" || v == "on");
 }
 
-static Args parse_args(int argc, char** argv) {
+static Args parse_args(int argc, char **argv) {
   Args a;
   std::map<std::string, std::string> kv;
   for (int i = 1; i < argc; i++) {
@@ -336,14 +346,17 @@ static Args parse_args(int argc, char** argv) {
       }
     }
   }
-  auto get = [&](const char* k, const char* def = nullptr) -> std::string {
+  auto get = [&](const char *k, const char *def = nullptr) -> std::string {
     auto it = kv.find(k);
-    if (it != kv.end()) return it->second;
-    if (def) return def;
+    if (it != kv.end())
+      return it->second;
+    if (def)
+      return def;
     return "";
   };
 
-  if (!get("op").empty()) a.op = get("op");
+  if (!get("op").empty())
+    a.op = get("op");
   a.bucket = get("bucket");
   a.region = get("region");
   if (a.bucket.empty() || a.region.empty()) {
@@ -351,38 +364,54 @@ static Args parse_args(int argc, char** argv) {
     print_help();
     std::exit(2);
   }
-  if (!get("prefix").empty()) a.prefix = get("prefix");
-  if (!get("size").empty()) a.size = parse_size(get("size"));
-  if (!get("threads").empty()) a.threads = std::stoi(get("threads"));
-  if (!get("total_ops").empty()) a.total_ops = std::stoull(get("total_ops"));
-  if (!get("pattern").empty()) a.pattern = get("pattern");
-  if (!get("zipf_s").empty()) a.zipf_s = std::stod(get("zipf_s"));
-  if (!get("addr_space").empty()) a.addr_space = std::stoull(get("addr_space"));
-  if (!get("endpoint").empty()) a.endpoint = get("endpoint");
+  if (!get("prefix").empty())
+    a.prefix = get("prefix");
+  if (!get("size").empty())
+    a.size = parse_size(get("size"));
+  if (!get("threads").empty())
+    a.threads = std::stoi(get("threads"));
+  if (!get("total_ops").empty())
+    a.total_ops = std::stoull(get("total_ops"));
+  if (!get("pattern").empty())
+    a.pattern = get("pattern");
+  if (!get("zipf_s").empty())
+    a.zipf_s = std::stod(get("zipf_s"));
+  if (!get("addr_space").empty())
+    a.addr_space = std::stoull(get("addr_space"));
+  if (!get("endpoint").empty())
+    a.endpoint = get("endpoint");
   if (!get("connect_timeout_ms").empty())
     a.connect_timeout_ms = std::stoi(get("connect_timeout_ms"));
   if (!get("request_timeout_ms").empty())
     a.request_timeout_ms = std::stoi(get("request_timeout_ms"));
   if (!get("max_connections").empty())
     a.max_connections = std::stoi(get("max_connections"));
-  if (!get("results_dir").empty()) a.results_dir = get("results_dir");
-  if (!get("log_ops").empty()) a.log_ops = parse_bool(get("log_ops"));
-  if (!get("sink").empty()) a.sink_path = get("sink");
+  if (!get("results_dir").empty())
+    a.results_dir = get("results_dir");
+  if (!get("log_ops").empty())
+    a.log_ops = parse_bool(get("log_ops"));
+  if (!get("sink").empty())
+    a.sink_path = get("sink");
 
-  if (!get("range_key").empty()) a.range_key = get("range_key");
-  if (!get("range_span").empty()) a.range_span = parse_size(get("range_span"));
+  if (!get("range_key").empty())
+    a.range_key = get("range_key");
+  if (!get("range_span").empty())
+    a.range_span = parse_size(get("range_span"));
 
-  if (!get("single_key").empty()) a.single_key = get("single_key");
+  if (!get("single_key").empty())
+    a.single_key = get("single_key");
   if (!get("delete_after").empty())
     a.delete_after = parse_bool(get("delete_after"));
 
-  if (a.threads <= 0) a.threads = 1;
-  if (a.max_connections <= 0) a.max_connections = std::max(2, a.threads * 2);
+  if (a.threads <= 0)
+    a.threads = 1;
+  if (a.max_connections <= 0)
+    a.max_connections = std::max(2, a.threads * 2);
   return a;
 }
 
 // ---------- S3 client factory ----------
-static std::shared_ptr<Aws::S3Crt::S3CrtClient> make_client(const Args& a) {
+static std::shared_ptr<Aws::S3Crt::S3CrtClient> make_client(const Args &a) {
   Aws::Client::ClientConfiguration cfg;
   cfg.region = a.region.c_str();
   cfg.connectTimeoutMs = a.connect_timeout_ms;
@@ -407,14 +436,15 @@ struct Stats {
   std::mutex op_mutex;
   std::unique_ptr<std::ofstream> ops_csv;
 
-  void open_ops_csv(const std::string& path) {
+  void open_ops_csv(const std::string &path) {
     ops_csv =
         std::make_unique<std::ofstream>(path, std::ios::out | std::ios::app);
     (*ops_csv) << "ts,op,ok,us,bytes,http_status,error\n";
   }
-  void log_op(const std::string& op, bool ok_, uint64_t us, uint64_t bytes_,
-              int http_status, const std::string& err_msg) {
-    if (!ops_csv) return;
+  void log_op(const std::string &op, bool ok_, uint64_t us, uint64_t bytes_,
+              int http_status, const std::string &err_msg) {
+    if (!ops_csv)
+      return;
     std::lock_guard<std::mutex> lg(op_mutex);
     (*ops_csv) << now_iso() << "," << op << "," << (ok_ ? 1 : 0) << "," << us
                << "," << bytes_ << "," << http_status << "," << "\"" << err_msg
@@ -422,8 +452,9 @@ struct Stats {
   }
 };
 
-static double percentile(std::vector<uint64_t>& v, double p) {
-  if (v.empty()) return 0.0;
+static double percentile(std::vector<uint64_t> &v, double p) {
+  if (v.empty())
+    return 0.0;
   std::sort(v.begin(), v.end());
   double pos = p * (v.size() - 1);
   size_t idx = (size_t)pos;
@@ -434,8 +465,9 @@ static double percentile(std::vector<uint64_t>& v, double p) {
 }
 
 // ---------- key naming ----------
-static inline std::string key_for(const Args& a, uint64_t idx) {
-  if (!a.single_key.empty()) return a.prefix + a.single_key;
+static inline std::string key_for(const Args &a, uint64_t idx) {
+  if (!a.single_key.empty())
+    return a.prefix + a.single_key;
   // include size in path to avoid naming collisions across sizes
   std::ostringstream ss;
   ss << a.prefix << "size-" << a.size << "/obj_" << idx;
@@ -444,16 +476,16 @@ static inline std::string key_for(const Args& a, uint64_t idx) {
 
 // ---------- workers ----------
 struct WorkerCtx {
-  const Args* args;
+  const Args *args;
   std::shared_ptr<Aws::S3Crt::S3CrtClient> client;
   std::unique_ptr<IDistribution> dist;
   uint64_t ops = 0;
   uint64_t thread_id = 0;
-  uint64_t start_slot_mod = 0;  // for seq, allow different start
+  uint64_t start_slot_mod = 0; // for seq, allow different start
   std::vector<uint64_t> lat_us;
 };
 
-static std::unique_ptr<IDistribution> make_dist(const std::string& name,
+static std::unique_ptr<IDistribution> make_dist(const std::string &name,
                                                 uint64_t n, double zipf_s,
                                                 uint64_t seed,
                                                 uint64_t seq_start = 0) {
@@ -469,8 +501,8 @@ static std::unique_ptr<IDistribution> make_dist(const std::string& name,
   }
 }
 
-static void run_write(WorkerCtx& w, Stats& st) {
-  const auto& a = *w.args;
+static void run_write(WorkerCtx &w, Stats &st) {
+  const auto &a = *w.args;
   for (uint64_t i = 0; i < w.ops; ++i) {
     uint64_t idx = w.dist->next();
     std::string key = key_for(a, idx);
@@ -505,8 +537,8 @@ static void run_write(WorkerCtx& w, Stats& st) {
   }
 }
 
-static void run_read_object(WorkerCtx& w, Stats& st) {
-  const auto& a = *w.args;
+static void run_read_object(WorkerCtx &w, Stats &st) {
+  const auto &a = *w.args;
   for (uint64_t i = 0; i < w.ops; ++i) {
     uint64_t idx = w.dist->next();
     std::string key = key_for(a, idx);
@@ -515,9 +547,9 @@ static void run_read_object(WorkerCtx& w, Stats& st) {
     req.SetKey(key.c_str());
     // Stream response to sink file (default /dev/null)
     req.SetResponseStreamFactory([&]() {
-      return Aws::New<Aws::FStream>(
-          kAllocTag, a.sink_path.c_str(),
-          std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
+      return Aws::New<Aws::FStream>(kAllocTag, a.sink_path.c_str(),
+                                    std::ios_base::out | std::ios_base::binary |
+                                        std::ios_base::trunc);
     });
 
     auto t0 = Clock::now();
@@ -528,7 +560,7 @@ static void run_read_object(WorkerCtx& w, Stats& st) {
     if (outcome.IsSuccess()) {
       // If object size differs from a.size, we still count the actual bytes
       // (ContentLength)
-      auto& result = outcome.GetResult();
+      auto &result = outcome.GetResult();
       uint64_t bytes_got = (uint64_t)result.GetContentLength();
       st.ok.fetch_add(1, std::memory_order_relaxed);
       st.bytes.fetch_add(bytes_got, std::memory_order_relaxed);
@@ -544,8 +576,8 @@ static void run_read_object(WorkerCtx& w, Stats& st) {
   }
 }
 
-static void run_read_range(WorkerCtx& w, Stats& st) {
-  const auto& a = *w.args;
+static void run_read_range(WorkerCtx &w, Stats &st) {
+  const auto &a = *w.args;
   // For range, slots represent valid start offsets in [0, range_span - size]
   if (a.range_span < a.size) {
     throw std::runtime_error("range_span must be >= size");
@@ -556,7 +588,7 @@ static void run_read_range(WorkerCtx& w, Stats& st) {
   uint64_t stride = domain / n;
 
   for (uint64_t i = 0; i < w.ops; ++i) {
-    uint64_t slot = w.dist->next();  // 0..n-1
+    uint64_t slot = w.dist->next(); // 0..n-1
     uint64_t offset = slot * stride;
     uint64_t end = offset + a.size - 1;
 
@@ -570,9 +602,9 @@ static void run_read_range(WorkerCtx& w, Stats& st) {
     req.SetRange(rg.str().c_str());
 
     req.SetResponseStreamFactory([&]() {
-      return Aws::New<Aws::FStream>(
-          kAllocTag, a.sink_path.c_str(),
-          std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
+      return Aws::New<Aws::FStream>(kAllocTag, a.sink_path.c_str(),
+                                    std::ios_base::out | std::ios_base::binary |
+                                        std::ios_base::trunc);
     });
 
     auto t0 = Clock::now();
@@ -596,8 +628,9 @@ static void run_read_range(WorkerCtx& w, Stats& st) {
 }
 
 // ---------- delete helper (optional) ----------
-static void delete_written_keys(
-    const Args& a, const std::shared_ptr<Aws::S3Crt::S3CrtClient>& client) {
+static void
+delete_written_keys(const Args &a,
+                    const std::shared_ptr<Aws::S3Crt::S3CrtClient> &client) {
   if (!a.single_key.empty()) {
     Aws::S3Crt::Model::DeleteObjectRequest req;
     req.SetBucket(a.bucket.c_str());
@@ -614,18 +647,19 @@ static void delete_written_keys(
 }
 
 // ---------- results ----------
-static void ensure_dir(const std::string& dir) {
+static void ensure_dir(const std::string &dir) {
   std::string cmd = "mkdir -p \"" + dir + "\"";
   std::ignore = std::system(cmd.c_str());
 }
 
-static void append_summary(const Args& a, const Stats& st, double seconds) {
+static void append_summary(const Args &a, const Stats &st, double seconds) {
   ensure_dir(a.results_dir);
   std::string path = a.results_dir + "/summary.csv";
   bool newfile = false;
   {
     std::ifstream in(path);
-    if (!in.good()) newfile = true;
+    if (!in.good())
+      newfile = true;
   }
   std::ofstream out(path, std::ios::out | std::ios::app);
   if (newfile) {
@@ -656,7 +690,7 @@ static void append_summary(const Args& a, const Stats& st, double seconds) {
       << (a.op == "read-range" ? (a.prefix + a.range_key) : "") << "\n";
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
   try {
     Args a = parse_args(argc, argv);
 
@@ -686,16 +720,19 @@ int main(int argc, char** argv) {
         ctx->ops = base_ops + (t < (int)rem ? 1 : 0);
         ctx->lat_us.reserve(ctx->ops);
         ctx->thread_id = (uint64_t)t;
-        uint64_t seed = 0xdeadbeefULL ^ ((uint64_t)t << 32) ^ (uint64_t)std::random_device{}();
+        uint64_t seed = 0xdeadbeefULL ^ ((uint64_t)t << 32) ^
+                        (uint64_t)std::random_device{}();
         uint64_t seq_start =
-            (a.addr_space > 0) ? ((a.addr_space / a.threads) * t) % a.addr_space : 0;
+            (a.addr_space > 0) ? ((a.addr_space / a.threads) * t) % a.addr_space
+                               : 0;
         uint64_t n =
             (a.op == "read-range")
                 ? std::min<uint64_t>(
                       a.addr_space,
                       (a.range_span >= a.size ? a.range_span - a.size + 1 : 1))
                 : a.addr_space;
-        if (n == 0) n = 1;
+        if (n == 0)
+          n = 1;
         ctx->dist = make_dist(a.pattern, n, a.zipf_s, seed, seq_start);
 
         ctxs.push_back(std::move(ctx));
@@ -703,7 +740,7 @@ int main(int argc, char** argv) {
 
       auto t0 = Clock::now();
       for (int t = 0; t < a.threads; ++t) {
-        WorkerCtx* ctxp = ctxs[t].get();
+        WorkerCtx *ctxp = ctxs[t].get();
         ths.emplace_back([&, ctxp]() {
           if (a.op == "write") {
             run_write(*ctxp, stats);
@@ -717,12 +754,14 @@ int main(int argc, char** argv) {
         });
       }
 
-      for (auto& th : ths) th.join();
+      for (auto &th : ths)
+        th.join();
       auto t1 = Clock::now();
       double seconds = std::chrono::duration<double>(t1 - t0).count();
 
-      for (auto& ctx: ctxs) {
-        stats.lat_us.insert(stats.lat_us.end(), ctx->lat_us.begin(), ctx->lat_us.end());
+      for (auto &ctx : ctxs) {
+        stats.lat_us.insert(stats.lat_us.end(), ctx->lat_us.begin(),
+                            ctx->lat_us.end());
       }
       append_summary(a, stats, seconds);
 
@@ -732,7 +771,7 @@ int main(int argc, char** argv) {
       }
     }
     Aws::ShutdownAPI(options);
-  } catch (const std::exception& ex) {
+  } catch (const std::exception &ex) {
     std::cerr << "FATAL: " << ex.what() << "\n";
     return 1;
   }
