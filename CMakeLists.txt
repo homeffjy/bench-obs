@@ -6,5 +6,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(AWSSDK REQUIRED COMPONENTS s3-crt s3 core)
 
 add_executable(s3_bench main.cpp)
-target_compile_options(s3_bench PRIVATE -O3 -Wall -Wextra)
-target_link_libraries(s3_bench PRIVATE aws-cpp-sdk-s3-crt aws-cpp-sdk-s3 aws-cpp-sdk-core)
+target_compile_options(s3_bench PRIVATE -O3 -Wall -Wextra -Wpedantic)
+target_link_libraries(s3_bench PRIVATE ${AWSSDK_LINK_LIBRARIES})
+
+add_executable(s3_bench_async async.cpp)
+target_compile_options(s3_bench_async PRIVATE -O3 -Wall -Wextra -Wpedantic)
+target_link_libraries(s3_bench_async PRIVATE ${AWSSDK_LINK_LIBRARIES})
