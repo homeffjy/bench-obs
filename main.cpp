@@ -450,6 +450,7 @@ struct WorkerCtx {
   uint64_t ops = 0;
   uint64_t thread_id = 0;
   uint64_t start_slot_mod = 0;  // for seq, allow different start
+  std::vector<uint64_t> lat_us;
 };
 
 static std::unique_ptr<IDistribution> make_dist(const std::string& name,
@@ -492,12 +493,12 @@ static void run_write(WorkerCtx& w, Stats& st) {
     if (outcome.IsSuccess()) {
       st.ok.fetch_add(1, std::memory_order_relaxed);
       st.bytes.fetch_add(a.size, std::memory_order_relaxed);
-      st.lat_us.push_back(us);
+      w.lat_us.push_back(us);
       st.log_op("PUT", true, us, a.size, 200, "");
     } else {
       st.err.fetch_add(1, std::memory_order_relaxed);
       int http_status = (int)outcome.GetError().GetResponseCode();
-      st.lat_us.push_back(us);
+      w.lat_us.push_back(us);
       st.log_op("PUT", false, us, 0, http_status,
                 outcome.GetError().GetMessage().c_str());
     }
@@ -531,12 +532,12 @@ static void run_read_object(WorkerCtx& w, Stats& st) {
       uint64_t bytes_got = (uint64_t)result.GetContentLength();
       st.ok.fetch_add(1, std::memory_order_relaxed);
       st.bytes.fetch_add(bytes_got, std::memory_order_relaxed);
-      st.lat_us.push_back(us);
+      w.lat_us.push_back(us);
       st.log_op("GET", true, us, bytes_got, 200, "");
     } else {
       st.err.fetch_add(1, std::memory_order_relaxed);
       int http_status = (int)outcome.GetError().GetResponseCode();
-      st.lat_us.push_back(us);
+      w.lat_us.push_back(us);
       st.log_op("GET", false, us, 0, http_status,
                 outcome.GetError().GetMessage().c_str());
     }
@@ -582,12 +583,12 @@ static void run_read_range(WorkerCtx& w, Stats& st) {
     if (outcome.IsSuccess()) {
       st.ok.fetch_add(1, std::memory_order_relaxed);
       st.bytes.fetch_add(a.size, std::memory_order_relaxed);
-      st.lat_us.push_back(us);
+      w.lat_us.push_back(us);
       st.log_op("GETR", true, us, a.size, 206, "");
     } else {
       st.err.fetch_add(1, std::memory_order_relaxed);
       int http_status = (int)outcome.GetError().GetResponseCode();
-      st.lat_us.push_back(us);
+      w.lat_us.push_back(us);
       st.log_op("GETR", false, us, 0, http_status,
                 outcome.GetError().GetMessage().c_str());
     }
@@ -665,7 +666,6 @@ int main(int argc, char** argv) {
       auto client = make_client(a);
 
       Stats stats;
-      stats.lat_us.reserve(a.total_ops);
       if (a.log_ops) {
         ensure_dir(a.results_dir);
         std::string ops_path = a.results_dir + "/ops.csv";
@@ -679,12 +679,12 @@ int main(int argc, char** argv) {
       uint64_t base_ops = a.total_ops / a.threads;
       uint64_t rem = a.total_ops % a.threads;
 
-      auto t0 = Clock::now();
       for (int t = 0; t < a.threads; ++t) {
         auto ctx = std::make_unique<WorkerCtx>();
         ctx->args = &a;
         ctx->client = client;
         ctx->ops = base_ops + (t < (int)rem ? 1 : 0);
+        ctx->lat_us.reserve(ctx->ops);
         ctx->thread_id = (uint64_t)t;
         uint64_t seed = 0xdeadbeefULL ^ ((uint64_t)t << 32) ^ (uint64_t)std::random_device{}();
         uint64_t seq_start =
@@ -702,7 +702,6 @@ int main(int argc, char** argv) {
       }
 
       auto t0 = Clock::now();
-      // 再启动线程，捕获稳定指针
       for (int t = 0; t < a.threads; ++t) {
         WorkerCtx* ctxp = ctxs[t].get();
         ths.emplace_back([&, ctxp]() {
@@ -722,6 +721,9 @@ int main(int argc, char** argv) {
       auto t1 = Clock::now();
       double seconds = std::chrono::duration<double>(t1 - t0).count();
 
+      for (auto& ctx: ctxs) {
+        stats.lat_us.insert(stats.lat_us.end(), ctx->lat_us.begin(), ctx->lat_us.end());
+      }
       append_summary(a, stats, seconds);
 
       if (a.op == "write" && a.delete_after) {
