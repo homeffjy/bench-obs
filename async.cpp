@@ -350,9 +350,7 @@ static std::shared_ptr<Aws::S3Crt::S3CrtClient> make_client(const Args &a) {
     cfg.endpointOverride = a.endpoint.c_str();
     cfg.scheme = Aws::Http::Scheme::HTTPS;
   }
-  // cfg.enableTcpKeepAlive = true;
-  auto client = std::make_shared<Aws::S3Crt::S3CrtClient>(cfg);
-  return client;
+  return std::make_shared<Aws::S3Crt::S3CrtClient>(cfg);
 }
 
 // ---------- stats ----------
@@ -482,7 +480,10 @@ struct AsyncCounters {
 struct OpContext : public Aws::Client::AsyncCallerContext {
   Clock::time_point t0;
   uint64_t expect_bytes = 0;
-  std::shared_ptr<Aws::IOStream> body_to_keep_alive; // for PUT body lifetime
+  std::shared_ptr<Aws::IOStream> body_keep; // PUT body
+  std::shared_ptr<Aws::S3Crt::Model::PutObjectRequest> put_req_keep;
+  std::shared_ptr<Aws::S3Crt::Model::GetObjectRequest> get_req_keep;
+  std::string sink_path_copy;
   AsyncCounters *ctrs = nullptr;
   Stats *stats = nullptr;
   std::string op_name; // "PUT" / "GET"
@@ -495,7 +496,7 @@ run_write_async(const Args &a,
                 Stats &stats) {
   AsyncCounters ctrs;
   ctrs.total = a.total_ops;
-  ctrs.window = static_cast<uint64_t>(a.threads);
+  ctrs.window = (uint64_t)a.threads;
 
   uint64_t n = a.addr_space;
   if (n == 0)
@@ -504,31 +505,29 @@ run_write_async(const Args &a,
   auto dist = make_dist(a.pattern, n, a.zipf_s, seed, 0);
 
   auto submit_one = [&](uint64_t idx_slot) {
-    const std::string key = key_for(a, idx_slot);
-    Aws::S3Crt::Model::PutObjectRequest req;
-    req.SetBucket(a.bucket.c_str());
-    req.SetKey(key.c_str());
-    req.SetContentLength(static_cast<long long>(a.size));
+    auto req = Aws::MakeShared<Aws::S3Crt::Model::PutObjectRequest>(kAllocTag);
+    req->SetBucket(a.bucket.c_str());
+    req->SetKey(key_for(a, idx_slot).c_str());
+    req->SetContentLength((long long)a.size);
     auto body = Aws::MakeShared<PatternStream>(kAllocTag, a.size, 0);
-    if (!body || !body->good())
-      throw std::runtime_error("pattern body not good()");
-    req.SetBody(body);
+    req->SetBody(body);
 
     auto ctx = Aws::MakeShared<OpContext>(kAllocTag);
     ctx->t0 = Clock::now();
     ctx->expect_bytes = a.size;
-    ctx->body_to_keep_alive = body;
+    ctx->body_keep = body;   // FIX: keep body alive
+    ctx->put_req_keep = req; // FIX: keep request alive
     ctx->ctrs = &ctrs;
     ctx->stats = &stats;
     ctx->op_name = "PUT";
 
     client->PutObjectAsync(
-        req,
-        [&, body](const Aws::S3Crt::S3CrtClient *,
-                  const Aws::S3Crt::Model::PutObjectRequest &,
-                  const Aws::S3Crt::Model::PutObjectOutcome &outcome,
-                  const std::shared_ptr<const Aws::Client::AsyncCallerContext>
-                      &base_ctx) {
+        *req,
+        [](const Aws::S3Crt::S3CrtClient *,
+           const Aws::S3Crt::Model::PutObjectRequest &,
+           const Aws::S3Crt::Model::PutObjectOutcome &outcome,
+           const std::shared_ptr<const Aws::Client::AsyncCallerContext>
+               &base_ctx) {
           auto ctxp = std::static_pointer_cast<const OpContext>(base_ctx);
           uint64_t us =
               std::chrono::duration_cast<Us>(Clock::now() - ctxp->t0).count();
@@ -595,7 +594,7 @@ run_read_object_async(const Args &a,
                       Stats &stats) {
   AsyncCounters ctrs;
   ctrs.total = a.total_ops;
-  ctrs.window = static_cast<uint64_t>(a.threads);
+  ctrs.window = (uint64_t)a.threads;
 
   uint64_t n = a.addr_space;
   if (n == 0)
@@ -604,31 +603,32 @@ run_read_object_async(const Args &a,
   auto dist = make_dist(a.pattern, n, a.zipf_s, seed, 0);
 
   auto submit_one = [&](uint64_t idx_slot) {
-    const std::string key = key_for(a, idx_slot);
-
-    Aws::S3Crt::Model::GetObjectRequest req;
-    req.SetBucket(a.bucket.c_str());
-    req.SetKey(key.c_str());
-    req.SetResponseStreamFactory([&]() {
-      return Aws::New<Aws::FStream>(kAllocTag, a.sink_path.c_str(),
+    auto req = Aws::MakeShared<Aws::S3Crt::Model::GetObjectRequest>(
+        kAllocTag); // FIX: heap
+    req->SetBucket(a.bucket.c_str());
+    req->SetKey(key_for(a, idx_slot).c_str());
+    std::string sink = a.sink_path; // FIX: capture by value
+    req->SetResponseStreamFactory([sink]() {
+      return Aws::New<Aws::FStream>(kAllocTag, sink.c_str(),
                                     std::ios_base::out | std::ios_base::binary |
                                         std::ios_base::trunc);
     });
 
     auto ctx = Aws::MakeShared<OpContext>(kAllocTag);
     ctx->t0 = Clock::now();
-    ctx->expect_bytes = 0; // we'll use ContentLength from outcome
+    ctx->get_req_keep = req;    // FIX: keep request alive
+    ctx->sink_path_copy = sink; // keep a value copy (not strictly必需)
     ctx->ctrs = &ctrs;
     ctx->stats = &stats;
     ctx->op_name = "GET";
 
     client->GetObjectAsync(
-        req,
-        [&](const Aws::S3Crt::S3CrtClient *,
-            const Aws::S3Crt::Model::GetObjectRequest &,
-            const Aws::S3Crt::Model::GetObjectOutcome &outcome,
-            const std::shared_ptr<const Aws::Client::AsyncCallerContext>
-                &base_ctx) {
+        *req,
+        [](const Aws::S3Crt::S3CrtClient *,
+           const Aws::S3Crt::Model::GetObjectRequest &,
+           const Aws::S3Crt::Model::GetObjectOutcome &outcome,
+           const std::shared_ptr<const Aws::Client::AsyncCallerContext>
+               &base_ctx) {
           auto ctxp = std::static_pointer_cast<const OpContext>(base_ctx);
           uint64_t us =
               std::chrono::duration_cast<Us>(Clock::now() - ctxp->t0).count();
